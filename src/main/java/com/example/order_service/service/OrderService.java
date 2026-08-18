@@ -5,6 +5,7 @@ import java.util.Map;
 
 import org.springframework.stereotype.Service;
 
+import com.example.order_service.client.PaymentServiceClient;
 import com.example.order_service.client.UserServiceClient;
 import com.example.order_service.dto.OrderResponse;
 import com.example.order_service.dto.UserResponse;
@@ -14,12 +15,16 @@ import com.example.order_service.exception.OrderNotFoundException;
 public class OrderService {
 
     private final UserServiceClient userServiceClient;
+    private final PaymentServiceClient paymentServiceClient;
 
     private final Map<Long, OrderData> orders = new HashMap<>();
 
-    public OrderService(UserServiceClient userServiceClient) {
+    public OrderService(
+            UserServiceClient userServiceClient,
+            PaymentServiceClient paymentServiceClient) {
 
         this.userServiceClient = userServiceClient;
+        this.paymentServiceClient = paymentServiceClient;
 
         // Sample orders
         orders.put(
@@ -55,18 +60,24 @@ public class OrderService {
 
     public OrderResponse getOrderById(Long orderId) {
 
-        // Check whether the order exists
+        // 1. Check whether order exists
         OrderData order = orders.get(orderId);
 
         if (order == null) {
             throw new OrderNotFoundException(orderId);
         }
 
-        // Call User Service through HTTP
+        // 2. Call User Service
         UserResponse user =
                 userServiceClient.getUserById(order.getUserId());
 
-        // Create final response
+        // 3. Call Payment Service
+        String paymentResponse =
+                paymentServiceClient.processPayment(order.getOrderId());
+
+        System.out.println("Payment Service Response: " + paymentResponse);
+
+        // 4. Return order response
         return new OrderResponse(
                 order.getOrderId(),
                 order.getUserId(),

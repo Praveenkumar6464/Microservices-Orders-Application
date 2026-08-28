@@ -1,63 +1,68 @@
 package com.example.order_service.client;
 
-import java.time.Duration;
-
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.client.JdkClientHttpRequestFactory;
+import org.springframework.cloud.client.circuitbreaker.CircuitBreaker;
+import org.springframework.cloud.client.circuitbreaker.CircuitBreakerFactory;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
-import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
-import org.springframework.retry.annotation.Retryable;
+import com.example.order_service.dto.PaymentResponse;
 
 @Component
 public class PaymentServiceClient {
 
     private final RestClient restClient;
+    private final CircuitBreakerFactory<?, ?> circuitBreakerFactory;
 
     public PaymentServiceClient(
             RestClient.Builder restClientBuilder,
-            @Value("${payment-service.base-url}") String paymentServiceBaseUrl) {
-
-        JdkClientHttpRequestFactory requestFactory =
-                new JdkClientHttpRequestFactory();
-
-        requestFactory.setReadTimeout(Duration.ofSeconds(3));
+            @Value("${payment-service.base-url}") String paymentServiceBaseUrl,
+            CircuitBreakerFactory<?, ?> circuitBreakerFactory) {
 
         this.restClient = restClientBuilder
                 .baseUrl(paymentServiceBaseUrl)
-                .requestFactory(requestFactory)
                 .build();
+        this.circuitBreakerFactory = circuitBreakerFactory;
     }
 
-    @Retryable(
-            retryFor = RuntimeException.class,
-            maxAttempts = 3
-    )
-    @CircuitBreaker(
-            name = "paymentService",
-            fallbackMethod = "paymentFallback"
-    )
-    public String processPayment(Long orderId) {
+    public PaymentResponse processPayment(Long orderId, Double amount) {
+        CircuitBreaker circuitBreaker = circuitBreakerFactory.create("paymentService");
 
-        System.out.println("Calling Payment Service...");
+        return circuitBreaker.run(
+            () -> {
+                String textResponse = restClient.get()
+                        .uri("/api/payments/{orderId}", orderId)
+                        .retrieve()
+//                        .onStatus(HttpStatusCode::isError, (request, response) -> {
+//                            throw new RuntimeException("Payment Service error");
+//                        })
+                        .onStatus(HttpStatusCode::isError, (request, response) -> {
+                            System.out.println("Payment service returned error status: " + response.getStatusCode());
+                            throw new RuntimeException("Payment Service error with status: " + response.getStatusCode());
+                        })
+                        .body(String.class);
 
-        return restClient
-                .get()
-                .uri("/api/payments/{orderId}", orderId)
-                .retrieve()
-                .body(String.class);
-    }
+                System.out.println("Received from Payment Service: " + textResponse);
 
-    public String paymentFallback(
-            Long orderId,
-            Throwable throwable) {
-
-        System.out.println(
-                "Payment Service is unavailable. Circuit Breaker activated."
+                // Build response manually from text
+                PaymentResponse paymentResponse = new PaymentResponse();
+                paymentResponse.setOrderId(orderId);
+                paymentResponse.setAmount(amount);
+                paymentResponse.setStatus("SUCCESS"); 
+                return paymentResponse;
+            },
+            throwable -> fallbackPayment(orderId, amount, throwable)
         );
+    }
 
-        return "Payment Service is currently unavailable for order "
-                + orderId;
+    private PaymentResponse fallbackPayment(Long orderId, Double amount, Throwable throwable) {
+        System.out.println("Payment Fallback triggered due to: " + throwable.getMessage());
+        return new PaymentResponse(
+            null,
+            orderId,
+            amount,
+            "FAILED_PENDING_RETRY"
+        );
     }
 }

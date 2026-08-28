@@ -6,24 +6,25 @@ import java.util.Map;
 import org.springframework.stereotype.Service;
 
 import com.example.order_service.client.PaymentServiceClient;
-import com.example.order_service.client.UserServiceClient;
+import com.example.order_service.dto.CreateOrderRequest;
 import com.example.order_service.dto.OrderResponse;
+import com.example.order_service.dto.PaymentResponse;
 import com.example.order_service.dto.UserResponse;
 import com.example.order_service.exception.OrderNotFoundException;
 
 @Service
 public class OrderService {
 
-    private final UserServiceClient userServiceClient;
+    private final UserServiceClientService userServiceClientService;
     private final PaymentServiceClient paymentServiceClient;
 
     private final Map<Long, OrderData> orders = new HashMap<>();
 
     public OrderService(
-            UserServiceClient userServiceClient,
+            UserServiceClientService userServiceClientService,
             PaymentServiceClient paymentServiceClient) {
 
-        this.userServiceClient = userServiceClient;
+        this.userServiceClientService = userServiceClientService;
         this.paymentServiceClient = paymentServiceClient;
 
         // Sample orders
@@ -58,36 +59,111 @@ public class OrderService {
         );
     }
 
+    // =========================================================
+    // GET ORDER BY ID
+    // =========================================================
+
     public OrderResponse getOrderById(Long orderId) {
 
-        // 1. Check whether order exists
+        // 1. Find order
         OrderData order = orders.get(orderId);
 
+        // 2. Order not found
         if (order == null) {
             throw new OrderNotFoundException(orderId);
         }
 
-        // 2. Call User Service
+        // 3. Get user through Circuit Breaker service
         UserResponse user =
-                userServiceClient.getUserById(order.getUserId());
+                userServiceClientService.getUserWithFallback(
+                        order.getUserId()
+                );
 
-        // 3. Call Payment Service
-        String paymentResponse =
-                paymentServiceClient.processPayment(order.getOrderId());
+        // 4. Process payment
+        PaymentResponse payment =
+                paymentServiceClient.processPayment(
+                        order.getOrderId(),
+                        order.getAmount()
+                );
 
-        System.out.println("Payment Service Response: " + paymentResponse);
+        // 5. Build response
+        OrderResponse response = new OrderResponse();
 
-        // 4. Return order response
-        return new OrderResponse(
-                order.getOrderId(),
-                order.getUserId(),
-                order.getProduct(),
-                order.getAmount(),
-                user
+        response.setOrderId(order.getOrderId());
+        response.setUserId(order.getUserId());
+        response.setProduct(order.getProduct());
+        response.setAmount(order.getAmount());
+        response.setUser(user);
+
+        // 6. Payment status
+        response.setPaymentStatus(
+                payment != null
+                        ? payment.getStatus()
+                        : "PENDING"
         );
+
+        return response;
     }
 
-    // In-memory order data
+    // =========================================================
+    // CREATE ORDER
+    // =========================================================
+
+    public OrderResponse createOrder(CreateOrderRequest request) {
+
+        // 1. Verify user through Circuit Breaker service
+        UserResponse user =
+                userServiceClientService.getUserWithFallback(
+                        request.getUserId()
+                );
+
+        // 2. Generate new order ID
+        Long newOrderId = orders.keySet()
+                .stream()
+                .max(Long::compareTo)
+                .orElse(1000L) + 1;
+
+        // 3. Create order
+        OrderData newOrder = new OrderData(
+                newOrderId,
+                request.getUserId(),
+                request.getProduct(),
+                request.getAmount()
+        );
+
+        // 4. Save order
+        orders.put(newOrderId, newOrder);
+
+        // 5. Process payment
+        PaymentResponse payment =
+                paymentServiceClient.processPayment(
+                        newOrderId,
+                        request.getAmount()
+                );
+
+        // 6. Build response
+        OrderResponse response = new OrderResponse();
+
+        response.setOrderId(newOrderId);
+        response.setUserId(request.getUserId());
+        response.setProduct(request.getProduct());
+        response.setAmount(request.getAmount());
+        response.setUser(user);
+
+        // 7. Payment status
+        response.setPaymentStatus(
+                payment != null
+                        ? payment.getStatus()
+                        : "PENDING"
+        );
+
+        return response;
+    }
+
+    // =========================================================
+    // ORDER DATA
+    // =========================================================
+
     private static class OrderData {
 
         private final Long orderId;
@@ -124,3 +200,4 @@ public class OrderService {
         }
     }
 }
+

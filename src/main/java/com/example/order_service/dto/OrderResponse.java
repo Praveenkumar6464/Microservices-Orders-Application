@@ -7,6 +7,7 @@ public class OrderResponse {
     private String product;
     private Double amount;
     private UserResponse user;
+    private String paymentStatus;
 
     public OrderResponse() {
     }
@@ -63,5 +64,13 @@ public class OrderResponse {
 
     public void setUser(UserResponse user) {
         this.user = user;
+    }
+    
+    public String getPaymentStatus() { 
+        return paymentStatus;
+    }
+
+    public void setPaymentStatus(String paymentStatus) { 
+        this.paymentStatus = paymentStatus;
     }
 }
